@@ -20,7 +20,7 @@ const upload = require("./multer");
 // Konfigurasi Firebase
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount),
-  storageBucket: "gs://mern-preloved-d301f.appspot.com", // Ganti dengan URL bucket Firebase Anda
+  storageBucket: "gs://mern-preloved-d301f.appspot.com",
 });
 
 //Route Not Sign In
@@ -70,6 +70,25 @@ router.get("/addproduct", ensureAuthenticated, (req, res) => {
   res.render("addproduct");
 });
 
+router.get("/editproduct", ensureAuthenticated, async (req, res) => {
+  const productId = req.query.productId;
+
+  try {
+    const product = await Image.findById(productId);
+
+    if (!product) {
+      req.flash("error", "Product not found");
+      return res.redirect("/showproduct");
+    }
+
+    res.render("editproduct", { product });
+  } catch (error) {
+    console.error(error);
+    req.flash("error", "Failed to load product");
+    res.status(500).send("Internal Server Error");
+  }
+});
+
 router.get("/showproduct", ensureAuthenticated, async (req, res) => {
   try {
     const products = await Image.find({ userId: req.user.id });
@@ -113,6 +132,52 @@ router.post("/addproduct", ensureAuthenticated, upload.single("image"), async (r
     req.flash("error", "Failed to add Product");
     console.error(error);
     res.render("addproduct", { error: "Error uploading product. Please try again." });
+  }
+});
+
+// Update Image Data
+router.post("/editproduct", upload.single("image"), async (req, res) => {
+  try {
+    const { name, description, condition, isOffer, price } = req.body;
+    const imageFile = req.file;
+    const productId = req.body.productId;
+
+    let updatedProduct;
+
+    if (imageFile) {
+      // Jika ada file gambar baru, hapus gambar lama dari Firebase Storage
+      const product = await Image.findById(productId);
+      const oldImageUrl = product.imageUrl;
+      const oldFileName = oldImageUrl.split("/").pop();
+
+      const bucket = admin.storage().bucket();
+      const oldFile = bucket.file(oldFileName);
+      await oldFile.delete();
+
+      // Simpan gambar baru di Firebase Storage
+      const imageFileName = `${Date.now()}_${imageFile.originalname}`;
+      const newFile = bucket.file(imageFileName);
+      await newFile.createWriteStream().end(imageFile.buffer);
+
+      const newImageUrl = `https://firebasestorage.googleapis.com/v0/b/${bucket.name}/o/${newFile.name}`;
+
+      // Update data produk dengan gambar baru
+      updatedProduct = await Image.findByIdAndUpdate(productId, { name, description, condition, isOffer: isOffer === "offer", price, imageUrl: newImageUrl }, { new: true });
+    } else {
+      // Jika tidak ada file gambar baru, hanya update data produk
+      updatedProduct = await Image.findByIdAndUpdate(productId, { name, description, condition, isOffer: isOffer === "offer", price }, { new: true });
+    }
+
+    if (!updatedProduct) {
+      return res.status(404).render("error", { message: "Product not found" });
+    }
+
+    req.flash("success_msg", "Product updated successfully");
+    res.redirect("/showproduct");
+  } catch (error) {
+    console.error(error);
+    req.flash("error", "Failed to update product");
+    res.redirect("/editproduct");
   }
 });
 
@@ -169,7 +234,6 @@ router.post("/signup", (req, res) => {
 
   if (errors.length > 0) {
     res.render("signup", {
-      pageTitle: "Taskify | Sign Up",
       errors,
       username,
       email,
@@ -182,7 +246,6 @@ router.post("/signup", (req, res) => {
         //User Exists
         errors.push({ msg: "Email is Already registered" });
         res.render("signup", {
-          pageTitle: "Taskify | Sign Up",
           errors,
           username,
           email,
